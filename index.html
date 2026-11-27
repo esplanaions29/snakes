@@ -715,7 +715,7 @@
                                 </label>
                                 <label class="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
                                     <input type="checkbox" id="teacher-check-repetition" class="w-4 h-4 rounded text-purple-600">
-                                    <span>Allow Question Repetition Before Cycle Ends</span>
+                                    <span>Repeat Only After All Questions Used</span>
                                 </label>
                             </div>
                         </div>
@@ -3021,28 +3021,41 @@
             gameState.usedQuestionIds = gameState.usedQuestionIds.filter(id => !shuffledIds.includes(id));
         }
 
-        function buildShuffledQuestion(rawQuestion) {
-            const letters = ['A', 'B', 'C', 'D'];
-            const shuffledLetters = shuffleArray(letters);
-            const newChoices = {};
-            let newCorrectAnswer = rawQuestion.correctAnswer;
+        function resetCycleUsedQuestions(subject = gameState.settings.subject) {
+    const poolIds = new Set(getActiveQuestionPool(subject).map(q => q.id));
+    gameState.usedQuestionIds = gameState.usedQuestionIds.filter(id => !poolIds.has(id));
+    rebuildQuestionCycle(subject);
+}
 
-            letters.forEach((targetLetter, idx) => {
-                const sourceLetter = shuffledLetters[idx];
-                newChoices[targetLetter] = rawQuestion.choices[sourceLetter];
-                if (rawQuestion.correctAnswer === sourceLetter) {
-                    newCorrectAnswer = targetLetter;
-                }
-            });
+function buildShuffledQuestion(rawQuestion) {
+    if (!rawQuestion || !rawQuestion.choices) return rawQuestion;
 
-            return {
-                ...rawQuestion,
-                choices: newChoices,
-                correctAnswer: newCorrectAnswer
-            };
+    const letters = ['A', 'B', 'C', 'D'];
+    const entries = letters.map(letter => ({
+        letter,
+        text: rawQuestion.choices[letter]
+    }));
+    const shuffledEntries = shuffleArray(entries);
+
+    const newChoices = {};
+    let newCorrectAnswer = rawQuestion.correctAnswer;
+
+    shuffledEntries.forEach((entry, idx) => {
+        const targetLetter = letters[idx];
+        newChoices[targetLetter] = entry.text;
+        if (rawQuestion.correctAnswer && entry.letter === rawQuestion.correctAnswer) {
+            newCorrectAnswer = targetLetter;
         }
+    });
 
-        function formatPassageParagraph(text, subject) {
+    return {
+        ...rawQuestion,
+        choices: newChoices,
+        correctAnswer: newCorrectAnswer
+    };
+}
+
+function formatPassageParagraph(text, subject) {
             const escaped = String(text)
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
@@ -3587,26 +3600,17 @@
                 rebuildQuestionCycle();
             }
 
-            if (gameState.settings.allowRepetition) {
-                const randRaw = pool[Math.floor(Math.random() * pool.length)];
-                gameState.totalQuestionsAskedInSession += 1;
-                const preparedQuestion = buildShuffledQuestion(randRaw);
-                gameState.questionHistory.push({
-                    order: gameState.totalQuestionsAskedInSession,
-                    id: preparedQuestion.id,
-                    subject: preparedQuestion.subject,
-                    questionNumber: preparedQuestion.questionNumber
-                });
-                return preparedQuestion;
-            }
-
-            const usedInCurrentSubject = gameState.usedQuestionIds.filter(id => poolIds.has(id));
+            let usedInCurrentSubject = gameState.usedQuestionIds.filter(id => poolIds.has(id));
             if (usedInCurrentSubject.length >= pool.length) {
-                rebuildQuestionCycle();
+                resetCycleUsedQuestions();
+                usedInCurrentSubject = [];
+                showToast('All questions in this set have been asked! Starting a new shuffled cycle.', 'info');
             }
 
-            const updatedUsedSet = new Set(gameState.usedQuestionIds);
-            const nextId = gameState.questionCycle.find(id => !updatedUsedSet.has(id));
+            const updatedUsedSet = new Set(usedInCurrentSubject);
+            const nextId = gameState.questionCycle.find(id => !updatedUsedSet.has(id))
+                || pool.find(q => !updatedUsedSet.has(q.id))?.id
+                || pool[0].id;
             const rawQuestion = pool.find(q => q.id === nextId) || pool[0];
 
             gameState.usedQuestionIds.push(rawQuestion.id);
@@ -4125,9 +4129,9 @@
 
         document.getElementById('btn-shuffle-questions').onclick = () => {
             const selectedSubject = document.getElementById('teacher-select-subject')?.value || gameState.settings.subject;
-            rebuildQuestionCycle(selectedSubject);
+            resetCycleUsedQuestions(selectedSubject);
             gameState.totalQuestionsAskedInSession = 0;
-            showToast(`${selectedSubject} questions shuffled for a fresh cycle!`, 'success');
+            showToast(`${selectedSubject} questions shuffled for a fresh non-repeating cycle!`, 'success');
         };
 
         function loadTeacherPlayerList() {
@@ -4213,11 +4217,10 @@
             gameState.settings.penalty = document.getElementById('teacher-select-penalty').value;
             gameState.settings.showExplanations = document.getElementById('teacher-check-explanations').checked;
             gameState.settings.enableTimer = document.getElementById('teacher-check-timer').checked;
-            const repCheck = document.getElementById('teacher-check-repetition');
-            gameState.settings.allowRepetition = repCheck ? repCheck.checked : false;
+            gameState.settings.allowRepetition = false;
 
             if (prevSubject !== chosenSubject) {
-                rebuildQuestionCycle(chosenSubject);
+                resetCycleUsedQuestions(chosenSubject);
                 gameState.totalQuestionsAskedInSession = 0;
             }
 
@@ -4243,7 +4246,7 @@
                 p.stats = { rolls: 0, questions: 0, correct: 0, incorrect: 0, ladders: 0, snakes: 0, bonuses: 0, bySubject: {} };
             });
             gameState.activePlayerIndex = 0;
-            rebuildQuestionCycle(gameState.settings.subject);
+            resetCycleUsedQuestions(gameState.settings.subject);
             gameState.totalQuestionsAskedInSession = 0;
             renderPlayerTokens();
             updateScoreboard();
@@ -4368,7 +4371,7 @@
                 p.stats = { rolls: 0, questions: 0, correct: 0, incorrect: 0, ladders: 0, snakes: 0, bonuses: 0, bySubject: {} };
             });
             gameState.activePlayerIndex = 0;
-            rebuildQuestionCycle(gameState.settings.subject);
+            resetCycleUsedQuestions(gameState.settings.subject);
             gameState.totalQuestionsAskedInSession = 0;
             renderPlayerTokens();
             updateScoreboard();
@@ -4619,12 +4622,12 @@
                     const parsed = JSON.parse(savedSettings);
                     const validSubjects = ['Mathematics 2', 'Filipino 2', 'English 2', 'GMRC 2', 'Makabansa 2', 'Mixed'];
                     const restoredSubject = validSubjects.includes(parsed.subject) ? parsed.subject : 'Mathematics 2';
-                    Object.assign(gameState.settings, parsed, { subject: restoredSubject });
+                    Object.assign(gameState.settings, parsed, { subject: restoredSubject, allowRepetition: false });
                 } catch(e) {}
             }
             syncMathQ3Inputs();
             syncSetupSubjectSelection(gameState.settings.subject);
-            rebuildQuestionCycle(gameState.settings.subject);
+            resetCycleUsedQuestions(gameState.settings.subject);
             document.getElementById('question-subject-badge').innerText = getSubjectShortBadge(gameState.settings.subject);
 
             const savedWorld = localStorage.getItem('TARA_SELECTED_WORLD');
